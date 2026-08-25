@@ -1,0 +1,144 @@
+openapi: 3.1.0
+info:
+  title: Personal Site Blog API
+  version: 1.0.0
+servers:
+  - url: /api/v1
+components:
+  securitySchemes:
+    AdminKey: { type: apiKey, in: header, name: X-Admin-Key }
+  parameters:
+    IfMatch: { name: If-Match, in: header, required: true, schema: { type: string } }
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, traceId]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: [string, "null"] }
+        traceId: { type: string }
+    PublicImage:
+      type: object
+      required: [url, alt, width, height]
+      properties:
+        url: { type: string, format: uri }
+        alt: { type: string, maxLength: 500 }
+        width: { type: integer, minimum: 1 }
+        height: { type: integer, minimum: 1 }
+        caption: { type: [string, "null"], maxLength: 1000 }
+    ArticleSummary:
+      type: object
+      required: [id, slug, title, summary, publishedAt, readingTimeMinutes]
+      properties:
+        id: { type: string, format: uuid }
+        slug: { type: string }
+        title: { type: string }
+        summary: { type: string }
+        publishedAt: { type: string, format: date-time }
+        readingTimeMinutes: { type: integer, minimum: 1 }
+        topic: { type: [string, "null"] }
+        image: { anyOf: [{ $ref: '#/components/schemas/PublicImage' }, { type: "null" }] }
+    BodyBlock:
+      oneOf:
+        - $ref: '#/components/schemas/TextBlock'
+        - $ref: '#/components/schemas/ListBlock'
+        - $ref: '#/components/schemas/CodeBlock'
+        - $ref: '#/components/schemas/ImageBlock'
+        - $ref: '#/components/schemas/TableBlock'
+      discriminator: { propertyName: type }
+    TextBlock:
+      type: object
+      required: [type, text]
+      properties:
+        type: { enum: [paragraph, heading, quote] }
+        text: { type: string, minLength: 1 }
+    ListBlock:
+      type: object
+      required: [type, items]
+      properties:
+        type: { const: list }
+        items: { type: array, minItems: 1, items: { type: string } }
+        ordered: { type: boolean, default: false }
+    CodeBlock:
+      type: object
+      required: [type, code]
+      properties:
+        type: { const: code }
+        code: { type: string, minLength: 1 }
+        language: { type: [string, "null"] }
+    ImageBlock:
+      type: object
+      required: [type, url, alt, width, height]
+      properties:
+        type: { const: image }
+        url: { type: string, format: uri }
+        alt: { type: string }
+        width: { type: integer }
+        height: { type: integer }
+        caption: { type: [string, "null"] }
+    TableBlock:
+      type: object
+      required: [type, caption, headers, rows]
+      properties:
+        type: { const: table }
+        caption: { type: string }
+        headers: { type: array, minItems: 1, items: { type: string } }
+        rows: { type: array, items: { type: array, items: { type: string } } }
+paths:
+  /articles:
+    get:
+      operationId: listArticles
+      parameters:
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 8, minimum: 1, maximum: 50 } }
+      responses:
+        '200': { description: Published article page }
+        '304': { description: Not modified }
+        '400': { description: Invalid cursor, content: { application/problem+json: { schema: { $ref: '#/components/schemas/Problem' } } } }
+  /articles/{slug}:
+    get:
+      operationId: getArticle
+      parameters: [{ name: slug, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Published article }, '304': { description: Not modified }, '404': { description: Not found } }
+  /series/{slug}:
+    get:
+      operationId: getSeries
+      parameters: [{ name: slug, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Published series }, '304': { description: Not modified }, '404': { description: Not found } }
+  /admin/media:
+    get: { operationId: listMedia, security: [{ AdminKey: [] }], responses: { '200': { description: Media page }, '401': { description: Unauthorized } } }
+    post:
+      operationId: uploadMedia
+      security: [{ AdminKey: [] }]
+      requestBody: { required: true, content: { multipart/form-data: { schema: { type: object, required: [file, alt], properties: { file: { type: string, format: binary }, alt: { type: string }, caption: { type: string }, decorative: { type: boolean } } } } } }
+      responses: { '201': { description: Uploaded }, '400': { description: Invalid image }, '503': { description: Provider unavailable } }
+  /admin/media/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get: { operationId: getMedia, security: [{ AdminKey: [] }], responses: { '200': { description: Media }, '404': { description: Not found } } }
+    patch: { operationId: patchMedia, security: [{ AdminKey: [] }], parameters: [{ $ref: '#/components/parameters/IfMatch' }], responses: { '200': { description: Updated }, '412': { description: Stale }, '428': { description: Missing precondition } } }
+    delete: { operationId: deleteMedia, security: [{ AdminKey: [] }], parameters: [{ $ref: '#/components/parameters/IfMatch' }], responses: { '204': { description: Deleted }, '409': { description: Referenced } } }
+  /admin/media/{id}/restore:
+    post: { operationId: restoreMedia, security: [{ AdminKey: [] }], parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }, { $ref: '#/components/parameters/IfMatch' }], responses: { '204': { description: Restored }, '409': { description: Object unavailable } } }
+  /admin/articles:
+    get: { operationId: listAdminArticles, security: [{ AdminKey: [] }], responses: { '200': { description: Article page } } }
+    post: { operationId: createArticle, security: [{ AdminKey: [] }], responses: { '201': { description: Created }, '400': { description: Invalid } } }
+  /admin/articles/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, format: uuid } }]
+    get: { operationId: getAdminArticle, security: [{ AdminKey: [] }], responses: { '200': { description: Article } } }
+    patch: { operationId: patchArticle, security: [{ AdminKey: [] }], parameters: [{ $ref: '#/components/parameters/IfMatch' }], responses: { '200': { description: Updated }, '409': { description: Slug conflict } } }
+    delete: { operationId: deleteArticle, security: [{ AdminKey: [] }], parameters: [{ $ref: '#/components/parameters/IfMatch' }], responses: { '204': { description: Deleted } } }
+  /admin/articles/{id}/restore: { post: { operationId: restoreArticle, security: [{ AdminKey: [] }], responses: { '204': { description: Restored } } } }
+  /admin/articles/{id}/revisions: { get: { operationId: listArticleRevisions, security: [{ AdminKey: [] }], responses: { '200': { description: Revisions } } } }
+  /admin/articles/{id}/revisions/{revisionNumber}: { get: { operationId: getArticleRevision, security: [{ AdminKey: [] }], responses: { '200': { description: Revision } } } }
+  /admin/series:
+    get: { operationId: listAdminSeries, security: [{ AdminKey: [] }], responses: { '200': { description: Series page } } }
+    post: { operationId: createSeries, security: [{ AdminKey: [] }], responses: { '201': { description: Created } } }
+  /admin/series/{id}:
+    get: { operationId: getAdminSeries, security: [{ AdminKey: [] }], responses: { '200': { description: Series } } }
+    patch: { operationId: patchSeries, security: [{ AdminKey: [] }], responses: { '200': { description: Updated } } }
+    delete: { operationId: deleteSeries, security: [{ AdminKey: [] }], responses: { '204': { description: Deleted } } }
+  /admin/series/{id}/restore: { post: { operationId: restoreSeries, security: [{ AdminKey: [] }], responses: { '204': { description: Restored } } } }
+  /admin/series/{id}/revisions: { get: { operationId: listSeriesRevisions, security: [{ AdminKey: [] }], responses: { '200': { description: Revisions } } } }
+  /admin/series/{id}/revisions/{revisionNumber}: { get: { operationId: getSeriesRevision, security: [{ AdminKey: [] }], responses: { '200': { description: Revision } } } }
