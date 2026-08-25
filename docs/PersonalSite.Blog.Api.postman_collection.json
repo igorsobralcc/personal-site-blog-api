@@ -1,0 +1,368 @@
+{
+  "info": {
+    "name": "Personal Site Blog API",
+    "description": "Public and protected Blog API workflows. Set baseUrl and adminKey, choose a local image for Upload media, and run folders in order. Creation and item reads capture IDs and ETags; public feed requests capture nextCursor.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://localhost:7146", "type": "string" },
+    { "key": "adminKey", "value": "", "type": "string" },
+    { "key": "page", "value": "1", "type": "string" },
+    { "key": "pageSize", "value": "20", "type": "string" },
+    { "key": "includeDeleted", "value": "false", "type": "string" },
+    { "key": "nextCursor", "value": "", "type": "string" },
+    { "key": "articleSlug", "value": "postman-article", "type": "string" },
+    { "key": "articleId", "value": "00000000-0000-0000-0000-000000000000", "type": "string" },
+    { "key": "articleEtag", "value": "", "type": "string" },
+    { "key": "articleRevision", "value": "1", "type": "string" },
+    { "key": "mediaId", "value": "00000000-0000-0000-0000-000000000000", "type": "string" },
+    { "key": "mediaEtag", "value": "", "type": "string" },
+    { "key": "seriesSlug", "value": "postman-series", "type": "string" },
+    { "key": "seriesId", "value": "00000000-0000-0000-0000-000000000000", "type": "string" },
+    { "key": "seriesEtag", "value": "", "type": "string" },
+    { "key": "seriesRevision", "value": "1", "type": "string" }
+  ],
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const path = pm.request.url.getPath();",
+          "const etag = pm.response.headers.get('ETag');",
+          "if (etag) {",
+          "  if (path.includes('/admin/articles/')) pm.collectionVariables.set('articleEtag', etag);",
+          "  else if (path.includes('/admin/media/')) pm.collectionVariables.set('mediaEtag', etag);",
+          "  else if (path.includes('/admin/series/')) pm.collectionVariables.set('seriesEtag', etag);",
+          "}",
+          "if (pm.response.code >= 200 && pm.response.code < 300 && pm.response.headers.get('Content-Type')?.includes('application/json')) {",
+          "  const body = pm.response.json();",
+          "  if (path.endsWith('/articles') && body.nextCursor) pm.collectionVariables.set('nextCursor', body.nextCursor);",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        { "name": "Liveness", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/health/live" } },
+        { "name": "Readiness", "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/health/ready" } }
+      ]
+    },
+    {
+      "name": "Article admin",
+      "item": [
+        {
+          "name": "List articles",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Admin-Key", "value": "{{adminKey}}" },
+              { "key": "X-Page", "value": "{{page}}" },
+              { "key": "X-Page-Size", "value": "{{pageSize}}" },
+              { "key": "X-Include-Deleted", "value": "{{includeDeleted}}" }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/articles"
+          }
+        },
+        {
+          "name": "Create Writing article",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-Admin-Key", "value": "{{adminKey}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"slug\": \"{{articleSlug}}\",\n  \"title\": \"Postman article\",\n  \"summary\": \"An article created from the Postman workflow.\",\n  \"topic\": \"API development\",\n  \"seoTitle\": null,\n  \"seoDescription\": null,\n  \"tags\": [\"dotnet\", \"api\"],\n  \"body\": [\n    { \"type\": \"heading\", \"text\": \"A structured article\" },\n    { \"type\": \"paragraph\", \"text\": \"All article text is inert structured data.\" },\n    { \"type\": \"code\", \"language\": \"csharp\", \"code\": \"Console.WriteLine(\\\"Hello from Postman\\\");\" },\n    { \"type\": \"list\", \"ordered\": true, \"items\": [\"Draft\", \"Publish\", \"Read\"] }\n  ]\n}"
+            },
+            "url": "{{baseUrl}}/api/v1/admin/articles"
+          },
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": [
+              "if (pm.response.code === 201) {",
+              "  const body = pm.response.json();",
+              "  pm.collectionVariables.set('articleId', body.id);",
+              "  pm.collectionVariables.set('articleSlug', body.slug);",
+              "  pm.collectionVariables.set('articleEtag', pm.response.headers.get('ETag'));",
+              "}"
+            ] }
+          }]
+        },
+        {
+          "name": "Get article",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/articles/{{articleId}}" }
+        },
+        {
+          "name": "Complete article as Draft",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "X-Admin-Key", "value": "{{adminKey}}" },
+              { "key": "If-Match", "value": "{{articleEtag}}" },
+              { "key": "Content-Type", "value": "application/merge-patch+json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"Draft\"\n}" },
+            "url": "{{baseUrl}}/api/v1/admin/articles/{{articleId}}"
+          }
+        },
+        {
+          "name": "Publish article",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "X-Admin-Key", "value": "{{adminKey}}" },
+              { "key": "If-Match", "value": "{{articleEtag}}" },
+              { "key": "Content-Type", "value": "application/merge-patch+json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"Published\"\n}" },
+            "url": "{{baseUrl}}/api/v1/admin/articles/{{articleId}}"
+          }
+        },
+        {
+          "name": "List article revisions",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/articles/{{articleId}}/revisions" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "if (pm.response.code === 200) {",
+            "  const revisions = pm.response.json();",
+            "  if (revisions.length) pm.collectionVariables.set('articleRevision', revisions[revisions.length - 1].revisionNumber);",
+            "}"
+          ] } }]
+        },
+        {
+          "name": "Get article revision",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/articles/{{articleId}}/revisions/{{articleRevision}}" }
+        },
+        {
+          "name": "Delete article",
+          "request": { "method": "DELETE", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }, { "key": "If-Match", "value": "{{articleEtag}}" }], "url": "{{baseUrl}}/api/v1/admin/articles/{{articleId}}" }
+        },
+        {
+          "name": "Get deleted article and current ETag",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/articles/{{articleId}}" }
+        },
+        {
+          "name": "Restore article to Draft",
+          "request": { "method": "POST", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }, { "key": "If-Match", "value": "{{articleEtag}}" }], "url": "{{baseUrl}}/api/v1/admin/articles/{{articleId}}/restore" }
+        }
+      ]
+    },
+    {
+      "name": "Public articles",
+      "item": [
+        {
+          "name": "Get restored article and current ETag",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/articles/{{articleId}}" }
+        },
+        {
+          "name": "Republish restored article",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }, { "key": "If-Match", "value": "{{articleEtag}}" }, { "key": "Content-Type", "value": "application/merge-patch+json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"Published\"\n}" },
+            "url": "{{baseUrl}}/api/v1/admin/articles/{{articleId}}"
+          }
+        },
+        {
+          "name": "List published articles",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/v1/articles?limit=8" }
+        },
+        {
+          "name": "Continue published article feed",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/v1/articles?limit=8&cursor={{nextCursor}}", "description": "Run only when the preceding response returned nextCursor." }
+        },
+        {
+          "name": "Get published article",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/v1/articles/{{articleSlug}}" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const etag = pm.response.headers.get('ETag');",
+            "if (etag) pm.collectionVariables.set('articleEtag', etag);"
+          ] } }]
+        },
+        {
+          "name": "Conditionally get published article",
+          "request": { "method": "GET", "header": [{ "key": "If-None-Match", "value": "{{articleEtag}}" }], "url": "{{baseUrl}}/api/v1/articles/{{articleSlug}}", "description": "Returns 304 when articleEtag is the current public representation tag." }
+        }
+      ]
+    },
+    {
+      "name": "Media admin",
+      "item": [
+        {
+          "name": "List media",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Admin-Key", "value": "{{adminKey}}" },
+              { "key": "X-Page", "value": "{{page}}" },
+              { "key": "X-Page-Size", "value": "{{pageSize}}" },
+              { "key": "X-Include-Deleted", "value": "{{includeDeleted}}" }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/media"
+          }
+        },
+        {
+          "name": "Upload media",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": [] },
+                { "key": "alt", "type": "text", "value": "A descriptive article image" },
+                { "key": "caption", "type": "text", "value": "Uploaded through the Blog API collection" },
+                { "key": "decorative", "type": "text", "value": "false" }
+              ]
+            },
+            "url": "{{baseUrl}}/api/v1/admin/media",
+            "description": "Choose a JPEG, PNG, or WebP file no larger than 10 MiB before sending."
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "if (pm.response.code === 201) {",
+            "  const body = pm.response.json();",
+            "  pm.collectionVariables.set('mediaId', body.id);",
+            "  pm.collectionVariables.set('mediaEtag', pm.response.headers.get('ETag'));",
+            "}"
+          ] } }]
+        },
+        {
+          "name": "Get media",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/media/{{mediaId}}" }
+        },
+        {
+          "name": "Patch media metadata",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "X-Admin-Key", "value": "{{adminKey}}" },
+              { "key": "If-Match", "value": "{{mediaEtag}}" },
+              { "key": "Content-Type", "value": "application/merge-patch+json" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"alt\": \"Updated descriptive alternative text\",\n  \"caption\": \"Updated caption\"\n}" },
+            "url": "{{baseUrl}}/api/v1/admin/media/{{mediaId}}"
+          }
+        },
+        {
+          "name": "Delete unreferenced media",
+          "request": { "method": "DELETE", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }, { "key": "If-Match", "value": "{{mediaEtag}}" }], "url": "{{baseUrl}}/api/v1/admin/media/{{mediaId}}" }
+        },
+        {
+          "name": "Get deleted media and current ETag",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/media/{{mediaId}}" }
+        },
+        {
+          "name": "Restore media",
+          "request": { "method": "POST", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }, { "key": "If-Match", "value": "{{mediaEtag}}" }], "url": "{{baseUrl}}/api/v1/admin/media/{{mediaId}}/restore" }
+        }
+      ]
+    },
+    {
+      "name": "Series admin",
+      "item": [
+        {
+          "name": "List series",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-Admin-Key", "value": "{{adminKey}}" },
+              { "key": "X-Page", "value": "{{page}}" },
+              { "key": "X-Page-Size", "value": "{{pageSize}}" },
+              { "key": "X-Include-Deleted", "value": "{{includeDeleted}}" }
+            ],
+            "url": "{{baseUrl}}/api/v1/admin/series"
+          }
+        },
+        {
+          "name": "Create Writing series",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }, { "key": "Content-Type", "value": "application/json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"slug\": \"{{seriesSlug}}\",\n  \"title\": \"Postman series\",\n  \"summary\": \"A series managed through the Postman workflow.\",\n  \"articleIds\": [\"{{articleId}}\"]\n}" },
+            "url": "{{baseUrl}}/api/v1/admin/series"
+          },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "if (pm.response.code === 201) {",
+            "  const body = pm.response.json();",
+            "  pm.collectionVariables.set('seriesId', body.id);",
+            "  pm.collectionVariables.set('seriesSlug', body.slug);",
+            "  pm.collectionVariables.set('seriesEtag', pm.response.headers.get('ETag'));",
+            "}"
+          ] } }]
+        },
+        {
+          "name": "Get series",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/series/{{seriesId}}" }
+        },
+        {
+          "name": "Complete series as Draft",
+          "request": { "method": "PATCH", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }, { "key": "If-Match", "value": "{{seriesEtag}}" }, { "key": "Content-Type", "value": "application/merge-patch+json" }], "body": { "mode": "raw", "raw": "{\n  \"status\": \"Draft\"\n}" }, "url": "{{baseUrl}}/api/v1/admin/series/{{seriesId}}" }
+        },
+        {
+          "name": "Publish series",
+          "request": { "method": "PATCH", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }, { "key": "If-Match", "value": "{{seriesEtag}}" }, { "key": "Content-Type", "value": "application/merge-patch+json" }], "body": { "mode": "raw", "raw": "{\n  \"status\": \"Published\"\n}" }, "url": "{{baseUrl}}/api/v1/admin/series/{{seriesId}}" }
+        },
+        {
+          "name": "List series revisions",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/series/{{seriesId}}/revisions" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "if (pm.response.code === 200) {",
+            "  const revisions = pm.response.json();",
+            "  if (revisions.length) pm.collectionVariables.set('seriesRevision', revisions[revisions.length - 1].revisionNumber);",
+            "}"
+          ] } }]
+        },
+        {
+          "name": "Get series revision",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/series/{{seriesId}}/revisions/{{seriesRevision}}" }
+        },
+        {
+          "name": "Delete series",
+          "request": { "method": "DELETE", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }, { "key": "If-Match", "value": "{{seriesEtag}}" }], "url": "{{baseUrl}}/api/v1/admin/series/{{seriesId}}" }
+        },
+        {
+          "name": "Get deleted series and current ETag",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/series/{{seriesId}}" }
+        },
+        {
+          "name": "Restore series to Draft",
+          "request": { "method": "POST", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }, { "key": "If-Match", "value": "{{seriesEtag}}" }], "url": "{{baseUrl}}/api/v1/admin/series/{{seriesId}}/restore" }
+        }
+      ]
+    },
+    {
+      "name": "Public series",
+      "item": [
+        {
+          "name": "Get restored series and current ETag",
+          "request": { "method": "GET", "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }], "url": "{{baseUrl}}/api/v1/admin/series/{{seriesId}}" }
+        },
+        {
+          "name": "Republish restored series",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "X-Admin-Key", "value": "{{adminKey}}" }, { "key": "If-Match", "value": "{{seriesEtag}}" }, { "key": "Content-Type", "value": "application/merge-patch+json" }],
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"Published\"\n}" },
+            "url": "{{baseUrl}}/api/v1/admin/series/{{seriesId}}"
+          }
+        },
+        {
+          "name": "Get published series",
+          "request": { "method": "GET", "header": [], "url": "{{baseUrl}}/api/v1/series/{{seriesSlug}}" },
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "const etag = pm.response.headers.get('ETag');",
+            "if (etag) pm.collectionVariables.set('seriesEtag', etag);"
+          ] } }]
+        },
+        {
+          "name": "Conditionally get published series",
+          "request": { "method": "GET", "header": [{ "key": "If-None-Match", "value": "{{seriesEtag}}" }], "url": "{{baseUrl}}/api/v1/series/{{seriesSlug}}", "description": "Returns 304 when seriesEtag is the current public representation tag." }
+        }
+      ]
+    }
+  ]
+}
