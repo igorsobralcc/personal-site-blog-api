@@ -1,0 +1,121 @@
+name: Deploy production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Optional published image tag; defaults to sha-<selected main commit>
+        required: false
+        type: string
+      acknowledge_ephemeral_storage:
+        description: Confirm this build still loses data when the container restarts
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: blog-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy production container
+    if: inputs.acknowledge_ephemeral_storage
+    environment: production
+    runs-on: [self-hosted, linux, blog-production]
+    timeout-minutes: 15
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Validate deployment configuration
+        env:
+          AdminKey: ${{ secrets.BLOG_ADMIN_KEY }}
+          CursorKey: ${{ secrets.BLOG_CURSOR_KEY }}
+          PublicSiteOrigin: ${{ vars.BLOG_PUBLIC_SITE_ORIGIN }}
+          Cors__Origins__0: ${{ vars.BLOG_CORS_ORIGIN }}
+        run: |
+          test -n "$AdminKey" || { echo "BLOG_ADMIN_KEY is not configured." >&2; exit 1; }
+          test -n "$CursorKey" || { echo "BLOG_CURSOR_KEY is not configured." >&2; exit 1; }
+          test -n "$PublicSiteOrigin" || { echo "BLOG_PUBLIC_SITE_ORIGIN is not configured." >&2; exit 1; }
+          test -n "$Cors__Origins__0" || { echo "BLOG_CORS_ORIGIN is not configured." >&2; exit 1; }
+          test "$AdminKey" != "$CursorKey" || { echo "Admin and cursor keys must be different." >&2; exit 1; }
+          case "$PublicSiteOrigin" in
+            *https://*) ;;
+            *) echo "BLOG_PUBLIC_SITE_ORIGIN must use HTTPS." >&2; exit 1 ;;
+          esac
+          case "$Cors__Origins__0" in
+            *https://*) ;;
+            *) echo "BLOG_CORS_ORIGIN must use HTTPS." >&2; exit 1 ;;
+          esac
+      - name: Deploy verified image
+        env:
+          AdminKey: ${{ secrets.BLOG_ADMIN_KEY }}
+          CursorKey: ${{ secrets.BLOG_CURSOR_KEY }}
+          PublicSiteOrigin: ${{ vars.BLOG_PUBLIC_SITE_ORIGIN }}
+          Cors__Origins__0: ${{ vars.BLOG_CORS_ORIGIN }}
+          REQUESTED_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+
+          app_name='personal-site-blog-api'
+          previous_name="${app_name}-previous"
+          image_name="ghcr.io/${GITHUB_REPOSITORY,,}"
+          image_tag="${REQUESTED_TAG:-sha-${GITHUB_SHA}}"
+          image_ref="${image_name}:${image_tag}"
+          had_previous='false'
+
+          docker pull "$image_ref"
+          docker rm --force "$previous_name" >/dev/null 2>&1 || true
+
+          rollback() {
+            docker rm --force "$app_name" >/dev/null 2>&1 || true
+            if [[ "$had_previous" == 'true' ]]; then
+              docker rename "$previous_name" "$app_name"
+              docker start "$app_name"
+            fi
+          }
+          trap rollback ERR
+
+          if docker container inspect "$app_name" >/dev/null 2>&1; then
+            docker stop "$app_name"
+            docker rename "$app_name" "$previous_name"
+            had_previous='true'
+          fi
+
+          docker run --detach \
+            --name "$app_name" \
+            --restart unless-stopped \
+            --publish 8081:8080 \
+            --env ASPNETCORE_ENVIRONMENT=Production \
+            --env AdminKey \
+            --env CursorKey \
+            --env PublicSiteOrigin \
+            --env Cors__Origins__0 \
+            "$image_ref"
+
+          for attempt in $(seq 1 30); do
+            health="$(docker inspect --format '{{.State.Health.Status}}' "$app_name")"
+            if [[ "$health" == 'healthy' ]]; then
+              trap - ERR
+              docker rm --force "$previous_name" >/dev/null 2>&1 || true
+              echo "Deployment succeeded with image tag $image_tag."
+              exit 0
+            fi
+            if [[ "$health" == 'unhealthy' ]]; then
+              docker logs --tail 100 "$app_name"
+              false
+            fi
+            sleep 2
+          done
+
+          docker logs --tail 100 "$app_name"
+          echo "Container did not become healthy before the timeout." >&2
+          false
