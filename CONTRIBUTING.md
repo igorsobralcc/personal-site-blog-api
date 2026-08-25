@@ -4,9 +4,9 @@
 
 Every feature, bug fix that changes behavior, and breaking refactor starts with
 a version-controlled specification under `specs/<feature-name>/spec.md`.
-Because the Blog API is a future project, its first implementation feature must
-also establish the versioned OpenAPI contract rather than inferring a contract
-from completed code.
+Because the Blog API is currently in its contract-design phase, its first
+implementation feature must also establish the versioned OpenAPI contract
+rather than inferring a contract from completed code.
 
 ### Workflow
 
