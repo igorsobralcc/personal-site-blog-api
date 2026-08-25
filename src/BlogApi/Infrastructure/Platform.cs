@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 
 namespace BlogApi.Infrastructure;
@@ -45,7 +46,7 @@ public static class Problems
     public static Task Write(HttpContext context, int status, string title, string? detail = null)
     {
         context.Response.StatusCode = status; context.Response.ContentType = "application/problem+json";
-        return context.Response.WriteAsJsonAsync(new { type = $"https://httpstatuses.com/{status}", title, status, detail, traceId = context.TraceIdentifier });
+        return context.Response.WriteAsync(JsonSerializer.Serialize(new { type = $"https://httpstatuses.com/{status}", title, status, detail, traceId = context.TraceIdentifier }));
     }
 }
 
