@@ -83,6 +83,12 @@ public static class HttpConcurrency
         return $"\"{version}\"";
     }
 
+    public static string RepresentationETag(object value)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(value);
+        return $"\"{Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant()}\"";
+    }
+
     public static IResult? Require(HttpContext context, long version, bool ignoreValue = false)
     {
         if (!context.Request.Headers.TryGetValue("If-Match", out var values))
@@ -104,7 +110,12 @@ public static class HttpConcurrency
     }
 }
 
-public sealed record Page<T>(IReadOnlyList<T> Items, int PageNumber, int PageSize, int TotalItems, int TotalPages);
+public sealed record Page<T>(
+    IReadOnlyList<T> Items,
+    [property: System.Text.Json.Serialization.JsonPropertyName("page")] int PageNumber,
+    int PageSize,
+    int TotalItems,
+    int TotalPages);
 public static class Paging
 {
     public static (int Page, int Size, bool IncludeDeleted, IResult? Error) Read(HttpContext context)
@@ -123,11 +134,14 @@ public static class Paging
             size = 0;
         }
 
-        var deleted = bool.TryParse(context.Request.Headers["X-Include-Deleted"], out var d) && d;
-        if (page < 1 || size is < 1 or > 100)
+        var includeDeletedText = context.Request.Headers["X-Include-Deleted"].ToString();
+        var deleted = false;
+        var includeDeletedIsValid = string.IsNullOrEmpty(includeDeletedText) ||
+            bool.TryParse(includeDeletedText, out deleted);
+        if (page < 1 || size is < 1 or > 100 || !includeDeletedIsValid)
         {
             return (page, size, deleted,
-            Problems.Result(context, 400, "Validation failed", errors: new Dictionary<string, string[]> { ["headers"] = ["Page must be positive and page size must be between 1 and 100."] }));
+            Problems.Result(context, 400, "Validation failed", errors: new Dictionary<string, string[]> { ["headers"] = ["Page must be positive, page size must be between 1 and 100, and include-deleted must be a boolean."] }));
         }
 
         return (page, size, deleted, null);
