@@ -27,3 +27,8 @@ authorization rules established by the preceding specifications.
 
 The current decision summary and approval checklist are recorded in
 [review-2026-08-25.md](review-2026-08-25.md).
+
+Draft test-oriented specifications for every executable application flow are
+indexed in [application-flows/README.md](application-flows/README.md). They add
+pessimistic success, rejection, dependency-failure, and concurrency scenarios
+without changing the approved product behavior above.
