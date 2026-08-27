@@ -1,9 +1,43 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+
+		<!--
+			Run Roslyn/code-style analyzers during build.
+			These settings are also consumed by dotnet format.
+		-->
+		<EnableNETAnalyzers>true</EnableNETAnalyzers>
+		<EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+		<AnalysisLevel>latest</AnalysisLevel>
+
+		<!-- Recommended for consistent CI/local builds -->
+		<TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+		<!--
+			The API intentionally uses top-level domain types and compact endpoint handlers.
+			Program must remain instantiable for WebApplicationFactory-based integration tests.
+		-->
+		<NoWarn>$(NoWarn);S1118;S3903;S8969</NoWarn>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<!--
+			Build-time equivalent of SonarLint / SonarQube IDE C# analysis.
+		-->
+		<PackageReference Include="SonarAnalyzer.CSharp" Version="10.33.0.1635">
+			<PrivateAssets>all</PrivateAssets>
+			<IncludeAssets>
+				runtime;
+				build;
+				native;
+				contentfiles;
+				analyzers;
+				buildtransitive
+			</IncludeAssets>
+		</PackageReference>
+	</ItemGroup>
 
 </Project>

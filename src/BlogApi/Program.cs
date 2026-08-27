@@ -9,7 +9,10 @@ builder.Services.AddSingleton<IMediaStorage, InMemoryMediaStorage>();
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
 {
     var origins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? [];
-    if (origins.Length > 0) policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod();
+    if (origins.Length > 0)
+    {
+        policy.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod();
+    }
 }));
 
 var app = builder.Build();
@@ -21,6 +24,6 @@ app.UseMiddleware<RequestLoggingMiddleware>();
 app.MapGet("/health/live", () => Results.Ok(new { status = "Healthy" }));
 app.MapHealthChecks("/health/ready");
 app.MapBlogApi();
-app.Run();
+await app.RunAsync();
 
 public partial class Program;

@@ -1,0 +1,19 @@
+root = true
+
+[*.cs]
+indent_style = space
+indent_size = 4
+end_of_line = crlf
+insert_final_newline = true
+
+# Always use braces for if/else, loops, and other control-flow statements.
+csharp_prefer_braces = true:error
+dotnet_diagnostic.IDE0011.severity = error
+
+# Keep method implementations as explicit blocks.
+csharp_style_expression_bodied_methods = false:error
+csharp_style_expression_bodied_local_functions = false:error
+
+# Do not preserve compact one-line statements or blocks when formatting.
+csharp_preserve_single_line_statements = false
+csharp_preserve_single_line_blocks = false

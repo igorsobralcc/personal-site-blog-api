@@ -11,8 +11,17 @@ public sealed class BlogStore
 public abstract class Entity
 {
     public Guid Id { get; init; } = Guid.CreateVersion7();
-    public DateTimeOffset CreatedAt { get; init; }
-    public DateTimeOffset UpdatedAt { get; set; }
-    public DateTimeOffset? DeletedAt { get; set; }
+    public DateTimeOffset CreatedAt
+    {
+        get; init;
+    }
+    public DateTimeOffset UpdatedAt
+    {
+        get; set;
+    }
+    public DateTimeOffset? DeletedAt
+    {
+        get; set;
+    }
     public long Version { get; set; } = 1;
 }

@@ -31,13 +31,17 @@ public sealed partial class PostmanCollectionTests
             "/api/v1/admin/articles", "/api/v1/admin/media",
             "/api/v1/admin/series", "/api/v1/series/"
         })
+        {
             Assert.Contains(route, json, StringComparison.Ordinal);
+        }
 
         var methods = EnumerateRequests(root.GetProperty("item"))
             .Select(request => request.GetProperty("method").GetString())
             .ToHashSet();
         foreach (var method in new[] { "GET", "POST", "PATCH", "DELETE" })
+        {
             Assert.Contains(method, methods);
+        }
     }
 
     [GeneratedRegex(@"\{\{([A-Za-z][A-Za-z0-9]*)\}\}")]
@@ -47,9 +51,18 @@ public sealed partial class PostmanCollectionTests
     {
         foreach (var item in items.EnumerateArray())
         {
-            if (item.TryGetProperty("request", out var request)) yield return request;
+            if (item.TryGetProperty("request", out var request))
+            {
+                yield return request;
+            }
+
             if (item.TryGetProperty("item", out var children))
-                foreach (var child in EnumerateRequests(children)) yield return child;
+            {
+                foreach (var child in EnumerateRequests(children))
+                {
+                    yield return child;
+                }
+            }
         }
     }
 }
