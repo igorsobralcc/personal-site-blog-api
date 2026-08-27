@@ -100,140 +100,160 @@ public static partial class ArticleEndpoints
     }
     private static IResult Create(CreateArticle input, HttpContext c, BlogStore store, TimeProvider clock)
     {
-        var now = clock.GetUtcNow();
-        var a = new Article
+        lock (store.Gate)
         {
-            CreatedAt = now,
-            UpdatedAt = now,
-            Slug = Clean(input.Slug),
-            Title = Clean(input.Title),
-            Summary = Clean(input.Summary),
-            Topic = Clean(input.Topic),
-            SeoTitle = Clean(input.SeoTitle),
-            SeoDescription = Clean(input.SeoDescription),
-            Body = input.Body?.DeepClone().AsArray() ?? [],
-            Tags = input.Tags ?? [],
-            EditorialMediaId = input.EditorialMediaId,
-            SocialMediaId = input.SocialMediaId
-        };
-        var error = Validate(a, store, null);
-        if (error is not null)
-        {
-            return Problems.Result(c, 400, "Validation failed", errors: error);
-        }
+            var now = clock.GetUtcNow();
+            var a = new Article
+            {
+                CreatedAt = now,
+                UpdatedAt = now,
+                Slug = Clean(input.Slug),
+                Title = Clean(input.Title),
+                Summary = Clean(input.Summary),
+                Topic = Clean(input.Topic),
+                SeoTitle = Clean(input.SeoTitle),
+                SeoDescription = Clean(input.SeoDescription),
+                Body = input.Body?.DeepClone().AsArray() ?? [],
+                Tags = input.Tags?.Select(t => t.Trim()).ToList() ?? [],
+                EditorialMediaId = input.EditorialMediaId,
+                SocialMediaId = input.SocialMediaId
+            };
+            var error = Validate(a, store, null);
+            if (error is not null)
+            {
+                return Problems.Result(c, 400, "Validation failed", errors: error);
+            }
 
-        a.ReadingTimeMinutes = ReadingTime(a.Body);
-        a.MediaIds = CollectMedia(a);
-        AddRevision(a, "Created", c, now);
-        store.Articles[a.Id] = a;
-        c.Response.Headers.Location = $"/api/v1/admin/articles/{a.Id}";
-        c.Response.Headers.ETag = HttpConcurrency.ETag(1);
-        return Results.Created(c.Response.Headers.Location!, AdminView(a));
+            SnapshotImageMetadata(a.Body, store);
+            a.ReadingTimeMinutes = ReadingTime(a.Body);
+            a.MediaIds = CollectMedia(a);
+            AddRevision(a, "Created", c, now);
+            store.Articles[a.Id] = a;
+            c.Response.Headers.Location = $"/api/v1/admin/articles/{a.Id}";
+            c.Response.Headers.ETag = HttpConcurrency.ETag(1);
+            return Results.Created(c.Response.Headers.Location!, AdminView(a));
+        }
     }
     private static IResult Patch(Guid id, JsonObject patch, HttpContext c, BlogStore store, TimeProvider clock)
     {
-        if (!store.Articles.TryGetValue(id, out var a) || a.DeletedAt is not null)
+        lock (store.Gate)
         {
-            return Problems.Result(c, 404, "Not Found");
-        }
+            if (!store.Articles.TryGetValue(id, out var a) || a.DeletedAt is not null)
+            {
+                return Problems.Result(c, 404, "Not Found");
+            }
 
-        var pre = HttpConcurrency.Require(c, a.Version);
-        if (pre is not null)
-        {
-            return pre;
-        }
+            var pre = HttpConcurrency.Require(c, a.Version);
+            if (pre is not null)
+            {
+                return pre;
+            }
 
-        var clone = Clone(a);
-        try
-        {
-            Apply(clone, patch);
-        }
-        catch (Exception e) { return Problems.Result(c, 400, "Validation failed", e.Message); }
-        var errors = Validate(clone, store, a.Id);
-        if (errors is not null)
-        {
-            return Problems.Result(c, 400, "Validation failed", errors: errors);
-        }
+            var clone = Clone(a);
+            try
+            {
+                Apply(clone, patch);
+            }
+            catch (Exception e) { return Problems.Result(c, 400, "Validation failed", e.Message); }
+            var errors = Validate(clone, store, a.Id);
+            if (errors is not null)
+            {
+                return Problems.Result(c, 400, "Validation failed", errors: errors);
+            }
 
-        if (a.PublishedAt is not null && clone.Slug != a.Slug)
-        {
-            return Problems.Result(c, 409, "Conflict", "A published slug is immutable.");
-        }
+            SnapshotImageMetadata(clone.Body, store);
 
-        if (!Allowed(a.Status, clone.Status))
-        {
-            return Problems.Result(c, 400, "Validation failed", "The lifecycle transition is not allowed.");
-        }
+            if (a.PublishedAt is not null && clone.Slug != a.Slug)
+            {
+                return Problems.Result(c, 409, "Conflict", "A published slug is immutable.");
+            }
 
-        if (clone.Status == PublicationStatus.Published && (string.IsNullOrEmpty(clone.Slug) || string.IsNullOrEmpty(clone.Title) || string.IsNullOrEmpty(clone.Summary) || clone.Body.Count == 0))
-        {
-            return Problems.Result(c, 400, "Validation failed", "Published articles require slug, title, summary, and body.");
-        }
+            if (!Allowed(a.Status, clone.Status))
+            {
+                return Problems.Result(c, 400, "Validation failed", "The lifecycle transition is not allowed.");
+            }
 
-        if (Equivalent(a, clone))
-        {
+            if (clone.Status == PublicationStatus.Published && (string.IsNullOrEmpty(clone.Slug) || string.IsNullOrEmpty(clone.Title) || string.IsNullOrEmpty(clone.Summary) || clone.Body.Count == 0))
+            {
+                return Problems.Result(c, 400, "Validation failed", "Published articles require slug, title, summary, and body.");
+            }
+
+            if (Equivalent(a, clone))
+            {
+                c.Response.Headers.ETag = HttpConcurrency.ETag(a.Version);
+                return Results.Ok(AdminView(a));
+            }
+            if (clone.Status == PublicationStatus.Published && a.PublishedAt is null)
+            {
+                clone.PublishedAt = clock.GetUtcNow();
+            }
+
+            Copy(clone, a);
+            a.Version++;
+            a.UpdatedAt = clock.GetUtcNow();
+            a.ReadingTimeMinutes = ReadingTime(a.Body);
+            a.MediaIds = CollectMedia(a);
+            AddRevision(a, "Updated", c, a.UpdatedAt);
             c.Response.Headers.ETag = HttpConcurrency.ETag(a.Version);
             return Results.Ok(AdminView(a));
         }
-        if (clone.Status == PublicationStatus.Published && a.PublishedAt is null)
-        {
-            clone.PublishedAt = clock.GetUtcNow();
-        }
-
-        Copy(clone, a);
-        a.Version++;
-        a.UpdatedAt = clock.GetUtcNow();
-        a.ReadingTimeMinutes = ReadingTime(a.Body);
-        a.MediaIds = CollectMedia(a);
-        AddRevision(a, "Updated", c, a.UpdatedAt);
-        c.Response.Headers.ETag = HttpConcurrency.ETag(a.Version);
-        return Results.Ok(AdminView(a));
     }
     private static IResult Delete(Guid id, HttpContext c, BlogStore store, TimeProvider clock)
     {
-        if (!store.Articles.TryGetValue(id, out var a))
+        lock (store.Gate)
         {
-            return Problems.Result(c, 404, "Not Found");
-        }
+            if (!store.Articles.TryGetValue(id, out var a))
+            {
+                return Problems.Result(c, 404, "Not Found");
+            }
 
-        var pre = HttpConcurrency.Require(c, a.Version, a.DeletedAt is not null);
-        if (pre is not null)
-        {
-            return pre;
-        }
+            var pre = HttpConcurrency.Require(c, a.Version, a.DeletedAt is not null);
+            if (pre is not null)
+            {
+                return pre;
+            }
 
-        if (a.DeletedAt is null)
-        {
-            a.DeletedAt = a.UpdatedAt = clock.GetUtcNow();
-            a.Version++;
-            AddRevision(a, "Deleted", c, a.UpdatedAt);
+            if (a.DeletedAt is null)
+            {
+                a.DeletedAt = a.UpdatedAt = clock.GetUtcNow();
+                a.Version++;
+                AddRevision(a, "Deleted", c, a.UpdatedAt);
+            }
+            return Results.NoContent();
         }
-        return Results.NoContent();
     }
     private static IResult Restore(Guid id, HttpContext c, BlogStore store, TimeProvider clock)
     {
-        if (!store.Articles.TryGetValue(id, out var a) || a.DeletedAt is null)
+        lock (store.Gate)
         {
-            return Problems.Result(c, 404, "Not Found");
-        }
+            if (!store.Articles.TryGetValue(id, out var a) || a.DeletedAt is null)
+            {
+                return Problems.Result(c, 404, "Not Found");
+            }
 
-        var pre = HttpConcurrency.Require(c, a.Version);
-        if (pre is not null)
-        {
-            return pre;
-        }
+            var pre = HttpConcurrency.Require(c, a.Version);
+            if (pre is not null)
+            {
+                return pre;
+            }
 
-        if (store.Articles.Values.Any(x => x.Id != id && x.DeletedAt is null && string.Equals(x.Slug, a.Slug, StringComparison.OrdinalIgnoreCase)))
-        {
-            return Problems.Result(c, 409, "Conflict");
-        }
+            if (store.Articles.Values.Any(x => x.Id != id && x.DeletedAt is null && string.Equals(x.Slug, a.Slug, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Problems.Result(c, 409, "Conflict", "The article slug is already active.");
+            }
 
-        a.DeletedAt = null;
-        a.Status = PublicationStatus.Draft;
-        a.Version++;
-        a.UpdatedAt = clock.GetUtcNow();
-        AddRevision(a, "Restored", c, a.UpdatedAt);
-        return Results.NoContent();
+            if (!MediaReferencesAreActive(a, store))
+            {
+                return Problems.Result(c, 409, "Conflict", "One or more referenced media assets are unavailable.");
+            }
+
+            a.DeletedAt = null;
+            a.Status = PublicationStatus.Draft;
+            a.Version++;
+            a.UpdatedAt = clock.GetUtcNow();
+            AddRevision(a, "Restored", c, a.UpdatedAt);
+            return Results.NoContent();
+        }
     }
     private static IResult Revisions(Guid id, HttpContext c, BlogStore store)
     {
@@ -274,18 +294,19 @@ public static partial class ArticleEndpoints
             var last = rows[limit - 1];
             next = Cursor.Write(last.PublishedAt!.Value, last.Id, config["CursorKey"] ?? config["AdminKey"] ?? "development-only");
         }
-        var etag = $"\"{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { items, next })))).ToLowerInvariant()}\"";
+        var response = new
+        {
+            items,
+            nextCursor = next
+        };
+        var etag = HttpConcurrency.RepresentationETag(response);
         c.Response.Headers.CacheControl = "public, max-age=60, stale-while-revalidate=300";
         if (HttpConcurrency.NotModified(c, etag))
         {
             return Results.StatusCode(304);
         }
 
-        return Results.Ok(new
-        {
-            items,
-            nextCursor = next
-        });
+        return Results.Ok(response);
     }
     private static IResult PublicDetail(string slug, HttpContext c, BlogStore store, IConfiguration config)
     {
@@ -315,7 +336,7 @@ public static partial class ArticleEndpoints
             seoDescription = a.SeoDescription ?? a.Summary,
             socialImage = Image(a.SocialMediaId, null, null, store)
         };
-        var etag = HttpConcurrency.ETag(a.Version);
+        var etag = HttpConcurrency.RepresentationETag(result);
         c.Response.Headers.CacheControl = "public, max-age=60, stale-while-revalidate=300";
         if (HttpConcurrency.NotModified(c, etag))
         {
@@ -565,6 +586,28 @@ public static partial class ArticleEndpoints
 
         return result;
     }
+
+    private static void SnapshotImageMetadata(JsonArray body, BlogStore store)
+    {
+        foreach (var block in body.OfType<JsonObject>().Where(x => x["type"]?.GetValue<string>() == "image"))
+        {
+            var id = block["mediaId"]!.GetValue<Guid>();
+            var media = store.Media[id];
+            if (!block.ContainsKey("alt"))
+            {
+                block["alt"] = media.Alt;
+            }
+            if (!block.ContainsKey("caption"))
+            {
+                block["caption"] = media.Caption;
+            }
+        }
+    }
+
+    private static bool MediaReferencesAreActive(Article article, BlogStore store)
+    {
+        return article.MediaIds.All(id => store.Media.TryGetValue(id, out var media) && media.DeletedAt is null);
+    }
     private static void Apply(Article a, JsonObject p)
     {
         string? S(string key, string? old)
@@ -635,7 +678,9 @@ public static partial class ArticleEndpoints
             Body = a.Body.DeepClone().AsArray(),
             Tags = [.. a.Tags],
             EditorialMediaId = a.EditorialMediaId,
-            SocialMediaId = a.SocialMediaId
+            SocialMediaId = a.SocialMediaId,
+            ReadingTimeMinutes = a.ReadingTimeMinutes,
+            MediaIds = [.. a.MediaIds]
         };
     }
 
