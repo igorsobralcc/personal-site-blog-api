@@ -66,122 +66,134 @@ public static partial class SeriesEndpoints
     }
     private static IResult Create(CreateSeries input, HttpContext c, BlogStore store, TimeProvider clock)
     {
-        var now = clock.GetUtcNow();
-        var x = new ArticleSeries { CreatedAt = now, UpdatedAt = now, Slug = Clean(input.Slug), Title = Clean(input.Title), Summary = Clean(input.Summary), ArticleIds = input.ArticleIds ?? [] };
-        var error = Validate(x, store, null);
-        if (error is not null)
+        lock (store.Gate)
         {
-            return Problems.Result(c, 400, "Validation failed", errors: error);
-        }
+            var now = clock.GetUtcNow();
+            var x = new ArticleSeries { CreatedAt = now, UpdatedAt = now, Slug = Clean(input.Slug), Title = Clean(input.Title), Summary = Clean(input.Summary), ArticleIds = input.ArticleIds ?? [] };
+            var error = Validate(x, store, null);
+            if (error is not null)
+            {
+                return Problems.Result(c, 400, "Validation failed", errors: error);
+            }
 
-        AddRevision(x, "Created", c, now);
-        store.Series[x.Id] = x;
-        c.Response.Headers.Location = $"/api/v1/admin/series/{x.Id}";
-        c.Response.Headers.ETag = HttpConcurrency.ETag(1);
-        return Results.Created(c.Response.Headers.Location!, View(x));
+            AddRevision(x, "Created", c, now);
+            store.Series[x.Id] = x;
+            c.Response.Headers.Location = $"/api/v1/admin/series/{x.Id}";
+            c.Response.Headers.ETag = HttpConcurrency.ETag(1);
+            return Results.Created(c.Response.Headers.Location!, View(x));
+        }
     }
     private static IResult Patch(Guid id, JsonObject patch, HttpContext c, BlogStore store, TimeProvider clock)
     {
-        if (!store.Series.TryGetValue(id, out var x) || x.DeletedAt is not null)
+        lock (store.Gate)
         {
-            return Problems.Result(c, 404, "Not Found");
-        }
+            if (!store.Series.TryGetValue(id, out var x) || x.DeletedAt is not null)
+            {
+                return Problems.Result(c, 404, "Not Found");
+            }
 
-        var pre = HttpConcurrency.Require(c, x.Version);
-        if (pre is not null)
-        {
-            return pre;
-        }
+            var pre = HttpConcurrency.Require(c, x.Version);
+            if (pre is not null)
+            {
+                return pre;
+            }
 
-        var clone = Clone(x);
-        try
-        {
-            Apply(clone, patch);
-        }
-        catch (Exception e) { return Problems.Result(c, 400, "Validation failed", e.Message); }
-        var error = Validate(clone, store, id);
-        if (error is not null)
-        {
-            return Problems.Result(c, 400, "Validation failed", errors: error);
-        }
+            var clone = Clone(x);
+            try
+            {
+                Apply(clone, patch);
+            }
+            catch (Exception e) { return Problems.Result(c, 400, "Validation failed", e.Message); }
+            var error = Validate(clone, store, id);
+            if (error is not null)
+            {
+                return Problems.Result(c, 400, "Validation failed", errors: error);
+            }
 
-        if (x.PublishedAt is not null && clone.Slug != x.Slug)
-        {
-            return Problems.Result(c, 409, "Conflict", "A published slug is immutable.");
-        }
+            if (x.PublishedAt is not null && clone.Slug != x.Slug)
+            {
+                return Problems.Result(c, 409, "Conflict", "A published slug is immutable.");
+            }
 
-        if (!Allowed(x.Status, clone.Status))
-        {
-            return Problems.Result(c, 400, "Validation failed", "Lifecycle transition is invalid.");
-        }
+            if (!Allowed(x.Status, clone.Status))
+            {
+                return Problems.Result(c, 400, "Validation failed", "Lifecycle transition is invalid.");
+            }
 
-        if (clone.Status == PublicationStatus.Published && (clone.Slug is null || clone.Title is null))
-        {
-            return Problems.Result(c, 400, "Validation failed", "Published series require slug and title.");
-        }
+            if (clone.Status == PublicationStatus.Published && (clone.Slug is null || clone.Title is null))
+            {
+                return Problems.Result(c, 400, "Validation failed", "Published series require slug and title.");
+            }
 
-        if (JsonSerializer.Serialize(View(x)) == JsonSerializer.Serialize(View(clone)))
-        {
+            if (Equivalent(x, clone))
+            {
+                c.Response.Headers.ETag = HttpConcurrency.ETag(x.Version);
+                return Results.Ok(View(x));
+            }
+            if (clone.Status == PublicationStatus.Published && x.PublishedAt is null)
+            {
+                clone.PublishedAt = clock.GetUtcNow();
+            }
+
+            Copy(clone, x);
+            x.Version++;
+            x.UpdatedAt = clock.GetUtcNow();
+            AddRevision(x, "Updated", c, x.UpdatedAt);
             c.Response.Headers.ETag = HttpConcurrency.ETag(x.Version);
             return Results.Ok(View(x));
         }
-        if (clone.Status == PublicationStatus.Published && x.PublishedAt is null)
-        {
-            clone.PublishedAt = clock.GetUtcNow();
-        }
-
-        Copy(clone, x);
-        x.Version++;
-        x.UpdatedAt = clock.GetUtcNow();
-        AddRevision(x, "Updated", c, x.UpdatedAt);
-        c.Response.Headers.ETag = HttpConcurrency.ETag(x.Version);
-        return Results.Ok(View(x));
     }
     private static IResult Delete(Guid id, HttpContext c, BlogStore store, TimeProvider clock)
     {
-        if (!store.Series.TryGetValue(id, out var x))
+        lock (store.Gate)
         {
-            return Problems.Result(c, 404, "Not Found");
-        }
+            if (!store.Series.TryGetValue(id, out var x))
+            {
+                return Problems.Result(c, 404, "Not Found");
+            }
 
-        var pre = HttpConcurrency.Require(c, x.Version, x.DeletedAt is not null);
-        if (pre is not null)
-        {
-            return pre;
-        }
+            var pre = HttpConcurrency.Require(c, x.Version, x.DeletedAt is not null);
+            if (pre is not null)
+            {
+                return pre;
+            }
 
-        if (x.DeletedAt is null)
-        {
-            x.DeletedAt = x.UpdatedAt = clock.GetUtcNow();
-            x.Version++;
-            AddRevision(x, "Deleted", c, x.UpdatedAt);
+            if (x.DeletedAt is null)
+            {
+                x.DeletedAt = x.UpdatedAt = clock.GetUtcNow();
+                x.Version++;
+                AddRevision(x, "Deleted", c, x.UpdatedAt);
+            }
+            return Results.NoContent();
         }
-        return Results.NoContent();
     }
     private static IResult Restore(Guid id, HttpContext c, BlogStore store, TimeProvider clock)
     {
-        if (!store.Series.TryGetValue(id, out var x) || x.DeletedAt is null)
+        lock (store.Gate)
         {
-            return Problems.Result(c, 404, "Not Found");
-        }
+            if (!store.Series.TryGetValue(id, out var x) || x.DeletedAt is null)
+            {
+                return Problems.Result(c, 404, "Not Found");
+            }
 
-        var pre = HttpConcurrency.Require(c, x.Version);
-        if (pre is not null)
-        {
-            return pre;
-        }
+            var pre = HttpConcurrency.Require(c, x.Version);
+            if (pre is not null)
+            {
+                return pre;
+            }
 
-        if (store.Series.Values.Any(y => y.Id != id && y.DeletedAt is null && string.Equals(y.Slug, x.Slug, StringComparison.OrdinalIgnoreCase)))
-        {
-            return Problems.Result(c, 409, "Conflict");
-        }
+            if (store.Series.Values.Any(y => y.Id != id && y.DeletedAt is null && string.Equals(y.Slug, x.Slug, StringComparison.OrdinalIgnoreCase)))
+            {
+                return Problems.Result(c, 409, "Conflict", "The series slug is already active.");
+            }
 
-        x.DeletedAt = null;
-        x.Status = PublicationStatus.Draft;
-        x.Version++;
-        x.UpdatedAt = clock.GetUtcNow();
-        AddRevision(x, "Restored", c, x.UpdatedAt);
-        return Results.NoContent();
+            x.DeletedAt = null;
+            x.Status = PublicationStatus.Draft;
+            x.Version++;
+            x.UpdatedAt = clock.GetUtcNow();
+            AddRevision(x, "Restored", c, x.UpdatedAt);
+            return Results.NoContent();
+        }
     }
     private static IResult Revisions(Guid id, HttpContext c, BlogStore store)
     {
@@ -211,7 +223,7 @@ public static partial class SeriesEndpoints
             x.PublishedAt,
             articles
         };
-        var etag = HttpConcurrency.ETag(x.Version + articles.Sum(a => (long)a.id.GetHashCode()));
+        var etag = HttpConcurrency.RepresentationETag(result);
         c.Response.Headers.CacheControl = "public, max-age=60, stale-while-revalidate=300";
         if (HttpConcurrency.NotModified(c, etag))
         {
@@ -330,6 +342,14 @@ public static partial class SeriesEndpoints
         t.Status = f.Status;
         t.PublishedAt = f.PublishedAt;
         t.ArticleIds = f.ArticleIds;
+    }
+    private static bool Equivalent(ArticleSeries left, ArticleSeries right)
+    {
+        return left.Slug == right.Slug && left.Title == right.Title &&
+            left.Summary == right.Summary && left.Status == right.Status &&
+            left.PublishedAt == right.PublishedAt &&
+            left.ArticleIds.Count == right.ArticleIds.Count &&
+            left.ArticleIds.ToHashSet().SetEquals(right.ArticleIds);
     }
     private static void AddRevision(ArticleSeries x, string operation, HttpContext c, DateTimeOffset at)
     {
